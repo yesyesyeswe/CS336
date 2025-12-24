@@ -1,0 +1,38 @@
+repos:
+  # Standard hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+        exclude: |
+          (?x)^(
+            assignment1-basics/tests/fixtures/ts_tests/model\.pt|
+            assignment1-basics/tests/fixtures/gpt2_vocab\.json|
+            assignment1-basics/tests/_snapshots/test_transformer_lm_truncated_input\.npz|
+            assignment1-basics/tests/_snapshots/test_transformer_lm\.npz|
+            assignment1-basics/tests/fixtures/tinystories_sample_5M\.txt
+          )$
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-symlinks
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+      - id: no-commit-to-branch
+        args: [--branch, main, --branch, develop]
+
+  # Ruff for Python format checking
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.8
+    hooks:
+      - id: ruff
+        name: ruff check
+        types: [python]
+        exclude: ^assignment1-basics/tests/
+      - id: ruff-format
+        name: ruff format --check
+        args: [--check]
+        types: [python]
+        exclude: ^assignment1-basics/tests/
