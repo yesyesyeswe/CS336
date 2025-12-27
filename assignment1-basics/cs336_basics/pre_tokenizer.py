@@ -68,7 +68,7 @@ def merge_dicts(dict1: dict[str, int], dict2: dict[str, int]):
     return dict1
 
 
-def pre_tokenize(path: str, num_processes: int) -> dict[tuple[bytes], int]:
+def pre_tokenize(path: str, num_processes: int, special_tokens) -> dict[tuple[bytes], int]:
     with open(path, "rb") as f:
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
@@ -83,7 +83,7 @@ def pre_tokenize(path: str, num_processes: int) -> dict[tuple[bytes], int]:
             chunk = f.read(end - start).decode("utf-8", errors="ignore")
 
             # Run pre-tokenization on your chunk and store the counts for each pre-token
-            chunk_parts = re.split(re.escape("<|endoftext|>"), chunk)
+            chunk_parts = re.split(re.escape("|".join(special_tokens)), chunk)
             for chunk_part in chunk_parts:
                 res = pool.apply_async(_pre_tokenize, args=(chunk_part,))
                 count_results.append(res)
