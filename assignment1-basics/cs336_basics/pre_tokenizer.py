@@ -2,6 +2,13 @@ import os
 from typing import BinaryIO
 import regex as re
 import multiprocessing
+from dataclasses import dataclass
+
+
+@dataclass
+class WordState:
+    token: list[bytes, ...]
+    count: int = 0
 
 
 def find_chunk_boundaries(
@@ -68,7 +75,7 @@ def merge_dicts(dict1: dict[str, int], dict2: dict[str, int]):
     return dict1
 
 
-def pre_tokenize(path: str, num_processes: int, special_tokens) -> dict[tuple[bytes], int]:
+def pre_tokenize(path: str, num_processes: int, special_tokens) -> list[WordState]:
     with open(path, "rb") as f:
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
@@ -94,8 +101,8 @@ def pre_tokenize(path: str, num_processes: int, special_tokens) -> dict[tuple[by
         for res in count_results:
             full_result = merge_dicts(full_result, res.get())
 
-        bytes_result = {}
+        word_states = []
         for key, value in full_result.items():
-            bytes_result[tuple(bytes([b]) for b in key.encode("utf-8"))] = value
+            word_states.append(WordState(token=list(tuple(bytes([b]) for b in key.encode("utf-8"))), count=value))
 
-        return bytes_result
+        return word_states

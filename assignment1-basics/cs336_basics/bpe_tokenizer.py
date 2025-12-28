@@ -1,8 +1,9 @@
-from cs336_basics.pre_tokenizer import pre_tokenize
+from cs336_basics.pre_tokenizer import pre_tokenize, WordState
 from collections import defaultdict
 from dataclasses import dataclass, field
 
 import os
+from pathlib import Path
 
 
 def decode_tuple_bytes_to_str(tuple_bytes: tuple[bytes]):
@@ -11,8 +12,35 @@ def decode_tuple_bytes_to_str(tuple_bytes: tuple[bytes]):
 
 @dataclass
 class PairContext:
-    context: dict[tuple[bytes, bytes], int] = field(default_factory=lambda: defaultdict(int))
+    context: dict[int, set[int]] = field(default_factory=lambda: defaultdict(set))  # Word index, Character index
     count: int = 0  # Total Count
+
+    def add(self, index: tuple[int, int]):
+        w_i, c_i = index
+        # in the case word: "iii", we just record pair (i,i)
+        # since the merge of the previous (i,i) will destroy the latter one
+        if w_i in self.context and c_i - 1 in self.context[w_i]:
+            return
+        self.context[w_i].add(c_i)
+
+    def remove(self, index: tuple[int, int]):
+        w_i, c_i = index
+        self.context[w_i].discard(c_i)
+        if len(self.context[w_i]) == 0:
+            del self.context[w_i]
+
+    def get_cindex(self, w_index):
+        assert w_index in self.context
+        return self.context[w_index]
+
+    def items(self):
+        return self.context.items()
+
+    def __iter__(self):
+        return iter(self.context)
+
+    def __contains__(self, word_idx):
+        return word_idx in self.context
 
 
 @dataclass
@@ -20,6 +48,7 @@ class BPETokenizer:
     input_path: str | os.PathLike
     vocab_size: int
     special_tokens: list[str]
+    pretoken: list[WordState] = field(init=False)
     pair_context_dict: dict[tuple[bytes, bytes], PairContext] = field(
         default_factory=lambda: defaultdict(PairContext), init=False
     )
@@ -33,146 +62,114 @@ class BPETokenizer:
             self.vocab[self.vocab_count] = token.encode("utf-8")
             self.vocab_count += 1
 
-        self.kkcount = 4
-
-    def update_pair_context_dict(self, pair, count, prev_bytes, next_bytes):
-        pair_context = self.pair_context_dict[pair]
-        pair_context.count += count
-        pair_ctx = (prev_bytes, next_bytes)
-        pair_context.context[pair_ctx] += count
-
-    def initial_pair_context(self, pretoken):
-        for token, count in pretoken.items():
+    def initial_pair_context(self):
+        for index, wordstate in enumerate(self.pretoken):
+            token = wordstate.token
+            if len(token) == 1:
+                continue
             for i in range(0, len(token) - 1):
                 pair = (token[i], token[i + 1])
-                next_bytes = token[i + 2] if i + 2 < len(token) else None
-                prev_bytes = token[i - 1] if i >= 1 else None
-                self.update_pair_context_dict(pair, count, prev_bytes, next_bytes)
+                self.pair_context_dict[pair].add((index, i))
+                self.pair_context_dict[pair].count += wordstate.count
 
-    def update_second_order_pair(self, p1, p1_prev_next, p1_count, isNextNotPrev: bool, force: bool = False):
-        if p1_prev_next[isNextNotPrev] is None:
-            return False
+    def update_context_dict(self, merged_pair, w_index, c_indexes, isNextNotPrev: bool):
+        word = self.pretoken[w_index]
+        token = word.token
 
-        if isNextNotPrev:
-            p2 = (p1[1], p1_prev_next[1])
-        else:
-            p2 = (p1_prev_next[0], p1[0])
+        for i, c_index in enumerate(c_indexes):
+            if not isNextNotPrev:
+                if c_index == 0:
+                    continue
+                # if the merged pair is adjacent, merge once
+                if i > 0 and c_indexes[i] - c_indexes[i - 1] == 2:
+                    continue
 
-        if not force and p1 == p2:
-            return True
+                new_pair = (token[c_index - 1], b"".join(merged_pair))
+                new_c_index = c_index - 1 - i
 
-        p2_ctx = self.pair_context_dict[p2]
-        p2_delete_keys = []
-        update_p2_prev_nexts = []
-        for p2_prev_next, count in p2_ctx.context.items():
-            if p2_prev_next[not isNextNotPrev] != p1[not isNextNotPrev]:
-                continue
-            update_p2_prev_nexts.append(p2_prev_next)
-            p2_ctx.context[p2_prev_next] -= p1_count
-            if p2_ctx.context[p2_prev_next] == 0:
-                p2_delete_keys.append(p2_prev_next)
-            elif p2_ctx.context[p2_prev_next] > 0:
-                pass
+                old_pair = (token[c_index - 1], token[c_index])
+                old_c_index = c_index - 1
+            else:
+                if c_index + 2 == len(token):
+                    return
+                # if the merged pair is adjacent, merge once
+                if i < len(c_indexes) - 1 and c_indexes[i + 1] - c_indexes[i] == 2:
+                    new_pair = (b"".join(merged_pair), b"".join(merged_pair))
+                else:
+                    new_pair = (b"".join(merged_pair), token[c_index + 2])
+                new_c_index = c_index - i
+                old_pair = (token[c_index + 1], token[c_index + 2])
+                old_c_index = c_index + 1
+
+            # Update New Pair
+            new_pair_ctx = self.pair_context_dict[new_pair]
+            new_pair_ctx.count += word.count
+            new_pair_ctx.add((w_index, new_c_index))
+
+            # Update Old Pair
+            assert old_pair in self.pair_context_dict, f"{old_pair}"
+            old_pair_ctx = self.pair_context_dict[old_pair]
+            old_pair_ctx.count -= word.count
+
+            if old_pair_ctx.count == 0:
+                del self.pair_context_dict[old_pair]
+            elif old_pair_ctx.count > 0:
+                old_pair_ctx.remove((w_index, old_c_index))
             else:
                 assert False, "count should not small than 0!"
 
-        for key in p2_delete_keys:
-            p2_ctx.context.pop(key, None)
+    def update_follow_pairs(self, w_index, c_indexes):
+        word = self.pretoken[w_index]
+        token = word.token
 
-        for p2_prev_next in update_p2_prev_nexts:
-            if isNextNotPrev:
-                p2_ctx.context[(b"".join(p1_prev_next[0], p1[0]), p2_prev_next[1])] = p1_count
+        for k in range(len(c_indexes)):
+            begin = c_indexes[k] + 2
+            if begin + 1 >= len(token):
+                return
+
+            end = len(token) - 1 if k == len(c_indexes) - 1 else c_indexes[k + 1] - 1
+
+            for i in range(begin, end):
+                follow_pair = (token[i], token[i + 1])
+                follow_pair_ctx = self.pair_context_dict[follow_pair]
+                follow_pair_ctx.remove((w_index, i))
+                follow_pair_ctx.add((w_index, i - 1 - k))
+
+    def get_token(self, w_index, c_indexes, merged_pair):
+        word = self.pretoken[w_index]
+        merged_bytes = b"".join(merged_pair)
+        old_token = word.token
+        new_tokens = []
+
+        # Align with the c_indexes
+        extended_indexes = [-2] + c_indexes
+
+        for i in range(len(extended_indexes)):
+            if i == len(extended_indexes) - 1:
+                new_tokens += old_token[extended_indexes[i] + 2 :]
             else:
-                p2_ctx.context[(p2_prev_next[0], b"".join(p1[1], p1_prev_next[1]))] = p1_count
+                new_tokens += old_token[extended_indexes[i] + 2 : extended_indexes[i + 1]] + [merged_bytes]
 
-        return False
+        assert c_indexes != []
 
-    def update_context_dict(self, merged_pair, prev_next, isNextNotPrev: bool, same: bool = False):
-        if prev_next[isNextNotPrev] is None:
-            return False
-
-        if isNextNotPrev:
-            old_pair = (merged_pair[1], prev_next[1])
-            new_pair = (b"".join(merged_pair), prev_next[1])
-        else:
-            old_pair = (prev_next[0], merged_pair[0])
-            new_pair = (prev_next[0], b"".join(merged_pair))
-
-        assert old_pair != new_pair, "pair could not be the same!"
-        assert new_pair != merged_pair, "pair could not be the same!"
-        if not same and old_pair == merged_pair:
-            return True
-
-        if not isNextNotPrev and merged_pair == (b"h", b"e") and old_pair == (b" t", b"h"):
-            print("YesYes!")
-            print(f"{new_pair}")
-
-        # Update new pair
-        old_pair_ctx = self.pair_context_dict[old_pair]
-        new_pair_ctx = self.pair_context_dict[new_pair]
-        old_pair_ctx_delete_keys = []
-        delete_count = 0
-        second_order_pair_info = []
-        for old_pair_prev_next, count in old_pair_ctx.context.items():
-            if old_pair_prev_next[not isNextNotPrev] != merged_pair[not isNextNotPrev]:
-                continue
-            if isNextNotPrev:
-                new_pair_ctx.context[(prev_next[0], old_pair_prev_next[1])] = count
-            else:
-                new_pair_ctx.context[(old_pair_prev_next[0], prev_next[1])] = count
-            new_pair_ctx.count += count
-            delete_count += count
-            old_pair_ctx_delete_keys.append(old_pair_prev_next)
-
-            ## Update Second order pair
-            same = self.update_second_order_pair(old_pair, old_pair_prev_next, count, isNextNotPrev)
-            if same:
-                second_order_pair_info.append([old_pair_prev_next, count])
-
-        for old_prev_next, count in second_order_pair_info:
-            self.update_second_order_pair(old_pair, old_prev_next, count, isNextNotPrev, True)
-
-        # Update old pair
-        if not isNextNotPrev and merged_pair == (b"h", b"e") and old_pair == (b" t", b"h"):
-            print(f"delete_count:{delete_count}")
-        old_pair_ctx.count -= delete_count
-        if old_pair_ctx.count == 0:
-            assert old_pair in self.pair_context_dict
-            self.pair_context_dict.pop(old_pair, None)
-        elif old_pair_ctx.count > 0:
-            for old_pair_prev_next in old_pair_ctx_delete_keys:
-                old_pair_ctx.context.pop(old_pair_prev_next, None)
-        else:
-            info = "when deal with "
-            info += "Next," if isNextNotPrev else "Prev,"
-            info += f" old_pair:{old_pair}, new_pair:{new_pair},"
-            info += f" old_pair_ctx.count:{old_pair_ctx.count + new_pair_ctx.count} should not < new_pair_ctx.count:{new_pair_ctx.count}!"
-            assert False, info
-
-        return False
+        return new_tokens
 
     def merge_pair(self):
         merged_pair, pair_ctx = max(self.pair_context_dict.items(), key=lambda x: (x[1].count, x[0]))
 
-        # if self.kkcount:
-        #     print(f"{merged_pair}, count={self.pair_context_dict[merged_pair].count}")
-        #     #print(pair_ctx.context)
-        #     print(f"(b'h', b'e') count :{self.pair_context_dict[(b'h', b'e')].count}")
-        #     if (b' t', b'h') in self.pair_context_dict:
-        #         print(self.pair_context_dict[(b' t', b'h')].count)
+        # In case pair_ctx change
+        for w_index, c_indexes in list(pair_ctx.items()):
+            if w_index not in pair_ctx:
+                continue
 
-        #     self.kkcount -= 1
+            sorted_indexes = sorted(c_indexes)
+            self.update_context_dict(merged_pair, w_index, sorted_indexes, False)
+            self.update_context_dict(merged_pair, w_index, sorted_indexes, True)
+            self.update_follow_pairs(w_index, sorted_indexes)
 
-        for prev_next, count in pair_ctx.context.items():
-            if merged_pair == (b"h", b"e"):
-                print(f"prev_next:{prev_next}")
-            prev_same = self.update_context_dict(merged_pair, prev_next, False)
-            next_same = self.update_context_dict(merged_pair, prev_next, True)
-
-        if prev_same:
-            self.update_context_dict(merged_pair, prev_next, False, True)
-        if next_same:
-            self.update_context_dict(merged_pair, prev_next, True, True)
+            self.pretoken[w_index] = WordState(
+                token=self.get_token(w_index, sorted_indexes, merged_pair), count=self.pretoken[w_index].count
+            )
 
         self.pair_context_dict.pop(merged_pair, None)
 
@@ -183,25 +180,29 @@ class BPETokenizer:
         self.initial_vocab()
 
         # PreTokenize
-        pretoken = pre_tokenize(self.input_path, 8, self.special_tokens)
+        self.pretoken = pre_tokenize(self.input_path, 8, self.special_tokens)
 
         # Merge the pair
         ## Initial the pair context
-        self.initial_pair_context(pretoken)
+        self.initial_pair_context()
 
         ## Merge pair
         merge_list = []
-        for _ in range(self.vocab_size - self.vocab_count):
+        length = self.vocab_size - self.vocab_count
+        for _ in range(length):
             merged_pair = self.merge_pair()
             merge_list.append(merged_pair)
+            self.vocab[self.vocab_count] = b"".join(merged_pair)
+            self.vocab_count += 1
 
         return self.vocab, merge_list
 
 
 if __name__ == "__main__":
-    input_path = "/home/yesyesyeswe/cs336/assignment1-basics/LICENSE"
+    current_dir = Path(__file__).parent.parent
+    input_path = current_dir / "LICENSE"
     special_tokens = ["<|endoftext|>"]
-    vocab_size = 256 + len(special_tokens) + 3
+    vocab_size = 256 + len(special_tokens) + 10
 
     bpe_tokenize = BPETokenizer(input_path, vocab_size, special_tokens)
 
