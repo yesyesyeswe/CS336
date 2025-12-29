@@ -4,10 +4,21 @@ from dataclasses import dataclass, field
 
 import os
 from pathlib import Path
+import json
+import heapq
 
 
 def decode_tuple_bytes_to_str(tuple_bytes: tuple[bytes]):
     return (b"".join(tuple_bytes)).decode("utf-8")
+
+
+class ReverseBytes:
+    def __init__(self, data):
+        self.data = data
+
+    def __lt__(self, other):
+        # reverse order in heapq
+        return self.data > other.data
 
 
 @dataclass
@@ -44,7 +55,7 @@ class PairContext:
 
 
 @dataclass
-class BPETokenizer:
+class BPETrainer:
     input_path: str | os.PathLike
     vocab_size: int
     special_tokens: list[str]
@@ -52,7 +63,10 @@ class BPETokenizer:
     pair_context_dict: dict[tuple[bytes, bytes], PairContext] = field(
         default_factory=lambda: defaultdict(PairContext), init=False
     )
+    pair_queue: list = field(default_factory=list, init=False)
+    updated_pairs: set[tuple[bytes, bytes]] = field(default_factory=set, init=False)
     vocab: dict[int, bytes] = field(default_factory=dict, init=False)
+    merge_list: list[tuple[bytes, bytes]] = field(default_factory=list, init=False)
     vocab_count: int = field(init=False)
 
     def initial_vocab(self):
@@ -71,6 +85,9 @@ class BPETokenizer:
                 pair = (token[i], token[i + 1])
                 self.pair_context_dict[pair].add((index, i))
                 self.pair_context_dict[pair].count += wordstate.count
+
+        for pair, pair_ctx in self.pair_context_dict.items():
+            heapq.heappush(self.pair_queue, (-pair_ctx.count, ReverseBytes(pair)))
 
     def update_context_dict(self, merged_pair, w_index, c_indexes, isNextNotPrev: bool):
         word = self.pretoken[w_index]
@@ -100,6 +117,10 @@ class BPETokenizer:
                 new_c_index = c_index - i
                 old_pair = (token[c_index + 1], token[c_index + 2])
                 old_c_index = c_index + 1
+
+            if old_pair != merged_pair:
+                self.updated_pairs.add(new_pair)
+                self.updated_pairs.add(old_pair)
 
             # Update New Pair
             new_pair_ctx = self.pair_context_dict[new_pair]
@@ -155,7 +176,13 @@ class BPETokenizer:
         return new_tokens
 
     def merge_pair(self):
-        merged_pair, pair_ctx = max(self.pair_context_dict.items(), key=lambda x: (x[1].count, x[0]))
+        while True:
+            nge_count, merged_pair = heapq.heappop(self.pair_queue)
+            merged_pair = merged_pair.data
+            if -nge_count == self.pair_context_dict[merged_pair].count:
+                break
+
+        pair_ctx = self.pair_context_dict[merged_pair]
 
         # In case pair_ctx change
         for w_index, c_indexes in list(pair_ctx.items()):
@@ -171,6 +198,14 @@ class BPETokenizer:
                 token=self.get_token(w_index, sorted_indexes, merged_pair), count=self.pretoken[w_index].count
             )
 
+        for pair in self.updated_pairs:
+            if pair not in self.pair_context_dict:
+                continue
+            count = self.pair_context_dict[pair].count
+            heapq.heappush(self.pair_queue, (-count, ReverseBytes(pair)))
+
+        self.updated_pairs.clear()
+
         self.pair_context_dict.pop(merged_pair, None)
 
         return merged_pair
@@ -180,33 +215,42 @@ class BPETokenizer:
         self.initial_vocab()
 
         # PreTokenize
-        self.pretoken = pre_tokenize(self.input_path, 8, self.special_tokens)
+        self.pretoken = pre_tokenize(self.input_path, 12, self.special_tokens)
 
         # Merge the pair
         ## Initial the pair context
         self.initial_pair_context()
 
         ## Merge pair
-        merge_list = []
+        self.merge_list = []
         length = self.vocab_size - self.vocab_count
         for _ in range(length):
             merged_pair = self.merge_pair()
-            merge_list.append(merged_pair)
+            self.merge_list.append(merged_pair)
             self.vocab[self.vocab_count] = b"".join(merged_pair)
             self.vocab_count += 1
 
-        return self.vocab, merge_list
+        return self.vocab, self.merge_list
+
+    def save(self, vocab_path, merges_path):
+        readable_vocab = {k: v.hex() for k, v in self.vocab.items()}
+        with open(vocab_path, "w") as f:
+            json.dump(readable_vocab, f)
+
+        readable_merges = [(a.hex(), b.hex()) for a, b in self.merge_list]
+        with open(merges_path, "w") as f:
+            json.dump(readable_merges, f)
 
 
 if __name__ == "__main__":
     current_dir = Path(__file__).parent.parent
-    input_path = current_dir / "LICENSE"
+    input_path = current_dir / "tests/fixtures/corpus.en"
     special_tokens = ["<|endoftext|>"]
-    vocab_size = 256 + len(special_tokens) + 10
+    vocab_size = 256 + len(special_tokens) + (500 - 256 - 1)
 
-    bpe_tokenize = BPETokenizer(input_path, vocab_size, special_tokens)
+    bpe_trainer = BPETrainer(input_path, vocab_size, special_tokens)
+    vocab, merge_list = bpe_trainer.train()
+    bpe_trainer.save("data/vocab.json", "data/merges.json")
 
-    vocab, merge_list = bpe_tokenize.train()
-
-    for merge_pair in merge_list:
-        print(decode_tuple_bytes_to_str(merge_pair))
+    # for merge_pair in merge_list:
+    #     print(decode_tuple_bytes_to_str(merge_pair))

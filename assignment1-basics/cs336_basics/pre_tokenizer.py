@@ -58,13 +58,19 @@ def find_chunk_boundaries(
     return sorted(set(chunk_boundaries))
 
 
-def _pre_tokenize(chunk: str) -> dict[str, int]:
+def _pre_tokenize_chunk(path: str, start: int, end: int, special_tokens: list[str]) -> dict[str, int]:
     PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
     result = {}
-    for match in re.finditer(PAT, chunk):
-        word = match.group()
-        result[word] = result.get(word, 0) + 1
+    with open(path, "rb") as f:
+        f.seek(start)
+        chunk = f.read(end - start).decode("utf-8", errors="ignore")
+
+        chunk_parts = re.split(re.escape("|".join(special_tokens)), chunk)
+        for chunk_part in chunk_parts:
+            for match in re.finditer(PAT, chunk_part):
+                word = match.group()
+                result[word] = result.get(word, 0) + 1
 
     return result
 
@@ -75,34 +81,24 @@ def merge_dicts(dict1: dict[str, int], dict2: dict[str, int]):
     return dict1
 
 
-def pre_tokenize(path: str, num_processes: int, special_tokens) -> list[WordState]:
+def pre_tokenize(path: str, num_processes: int, special_tokens: list[str]) -> list[WordState]:
     with open(path, "rb") as f:
         boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
 
-        count_results = []
+    count_results = []
 
-        pool = multiprocessing.Pool(processes=num_processes)
-
-        # The following is a serial implementation, but you can parallelize this
-        # by sending each start/end pair to a set of processes.
+    # Process chunk using multiprocessing
+    with multiprocessing.Pool(processes=num_processes) as pool:
         for start, end in zip(boundaries[:-1], boundaries[1:]):
-            f.seek(start)
-            chunk = f.read(end - start).decode("utf-8", errors="ignore")
-
-            # Run pre-tokenization on your chunk and store the counts for each pre-token
-            chunk_parts = re.split(re.escape("|".join(special_tokens)), chunk)
-            for chunk_part in chunk_parts:
-                res = pool.apply_async(_pre_tokenize, args=(chunk_part,))
-                count_results.append(res)
-
-        pool.close()
+            res = pool.apply_async(_pre_tokenize_chunk, args=(path, start, end, special_tokens))
+            count_results.append(res)
 
         full_result = {}
         for res in count_results:
             full_result = merge_dicts(full_result, res.get())
 
-        word_states = []
-        for key, value in full_result.items():
-            word_states.append(WordState(token=list(tuple(bytes([b]) for b in key.encode("utf-8"))), count=value))
+    word_states = []
+    for key, value in full_result.items():
+        word_states.append(WordState(token=[bytes([b]) for b in key.encode("utf-8")], count=value))
 
-        return word_states
+    return word_states
