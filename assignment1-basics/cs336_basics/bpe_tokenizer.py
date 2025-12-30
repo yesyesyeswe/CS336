@@ -1,11 +1,13 @@
-from cs336_basics.pre_tokenizer import pre_tokenize, WordState
+from cs336_basics.pre_tokenizer import pre_tokenize, pre_tokenize_from_str, WordState
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 import os
 from pathlib import Path
 import json
 import heapq
+import regex as re
 
 
 def decode_tuple_bytes_to_str(tuple_bytes: tuple[bytes]):
@@ -59,6 +61,7 @@ class BPETrainer:
     input_path: str | os.PathLike
     vocab_size: int
     special_tokens: list[str]
+    isTrain: bool = True
     pretoken: list[WordState] = field(init=False)
     pair_context_dict: dict[tuple[bytes, bytes], PairContext] = field(
         default_factory=lambda: defaultdict(PairContext), init=False
@@ -86,8 +89,9 @@ class BPETrainer:
                 self.pair_context_dict[pair].add((index, i))
                 self.pair_context_dict[pair].count += wordstate.count
 
-        for pair, pair_ctx in self.pair_context_dict.items():
-            heapq.heappush(self.pair_queue, (-pair_ctx.count, ReverseBytes(pair)))
+        if self.isTrain:
+            for pair, pair_ctx in self.pair_context_dict.items():
+                heapq.heappush(self.pair_queue, (-pair_ctx.count, ReverseBytes(pair)))
 
     def update_context_dict(self, merged_pair, w_index, c_indexes, isNextNotPrev: bool):
         word = self.pretoken[w_index]
@@ -175,12 +179,13 @@ class BPETrainer:
 
         return new_tokens
 
-    def merge_pair(self):
-        while True:
-            nge_count, merged_pair = heapq.heappop(self.pair_queue)
-            merged_pair = merged_pair.data
-            if -nge_count == self.pair_context_dict[merged_pair].count:
-                break
+    def merge_pair(self, merged_pair: str = ""):
+        if self.isTrain:
+            while True:
+                nge_count, merged_pair = heapq.heappop(self.pair_queue)
+                merged_pair = merged_pair.data
+                if -nge_count == self.pair_context_dict[merged_pair].count:
+                    break
 
         pair_ctx = self.pair_context_dict[merged_pair]
 
@@ -198,13 +203,14 @@ class BPETrainer:
                 token=self.get_token(w_index, sorted_indexes, merged_pair), count=self.pretoken[w_index].count
             )
 
-        for pair in self.updated_pairs:
-            if pair not in self.pair_context_dict:
-                continue
-            count = self.pair_context_dict[pair].count
-            heapq.heappush(self.pair_queue, (-count, ReverseBytes(pair)))
+        if self.isTrain:
+            for pair in self.updated_pairs:
+                if pair not in self.pair_context_dict:
+                    continue
+                count = self.pair_context_dict[pair].count
+                heapq.heappush(self.pair_queue, (-count, ReverseBytes(pair)))
 
-        self.updated_pairs.clear()
+            self.updated_pairs.clear()
 
         self.pair_context_dict.pop(merged_pair, None)
 
@@ -232,6 +238,22 @@ class BPETrainer:
 
         return self.vocab, self.merge_list
 
+    def pre_encode(self, pretoken, merges, vocab):
+        # Prepare for encode
+        self.isTrain = False
+        self.merge_list = merges
+        self.vocab = vocab
+        self.pretoken = pretoken
+
+        # Initial the pair context
+        self.initial_pair_context()
+
+        # Merge pair
+        for merged_pair in self.merge_list:
+            self.merge_pair(merged_pair)
+
+        return self.pretoken
+
     def save(self, vocab_path, merges_path):
         readable_vocab = {k: v.hex() for k, v in self.vocab.items()}
         with open(vocab_path, "w") as f:
@@ -240,6 +262,77 @@ class BPETrainer:
         readable_merges = [(a.hex(), b.hex()) for a, b in self.merge_list]
         with open(merges_path, "w") as f:
             json.dump(readable_merges, f)
+
+
+class BPETokenizer:
+    def __init__(
+        self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] | None = None
+    ):
+        self.vocab = vocab
+        self.merges = merges
+        if not special_tokens:
+            self.special_tokens = ["<|endoftext|>"]
+        else:
+            self.special_tokens = special_tokens
+            self.special_tokens.append("<|endoftext|>")
+
+        self.encoder = {v: k for k, v in self.vocab.items()}
+        if self.special_tokens:
+            for token in self.special_tokens:
+                if token not in self.encoder:
+                    self.encoder[token] = len(self.vocab)
+                    self.vocab[len(self.vocab)] = token
+
+    @classmethod
+    def from_files(cls, vocab_filepath: str, merges_filepath: str, special_tokens: list[str] | None = None):
+        with open(vocab_filepath) as f:
+            _vocab = json.load(f)
+
+        vocab = {int(k): bytes.fromhex(v) for k, v in _vocab.items()}
+
+        with open(merges_filepath) as f:
+            _merges = json.load(f)
+
+        merges = [(bytes.fromhex(pair[0]), bytes.fromhex(pair[1])) for pair in _merges]
+
+        bpe_tokenizer = cls(vocab=vocab, merges=merges, special_tokens=special_tokens)
+
+        return bpe_tokenizer
+
+    def encode(self, text: str) -> list[int]:
+        self.pretoken = pre_tokenize_from_str(text, 12, self.special_tokens)
+
+        bpe_trainer = BPETrainer("", 0, self.special_tokens)
+        bpe_trainer.pretoken = self.pretoken
+        pre_encode = bpe_trainer.pre_encode(self.pretoken, self.merges, self.vocab)
+
+        pre_encode_dict = {}
+        for wordstate in pre_encode:
+            pre_encode_dict[b"".join(wordstate.token)] = [self.encoder[tk] for tk in wordstate.token]
+
+        PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+
+        encode_result = []
+        chunk_parts = re.split(re.escape("|".join(self.special_tokens)), text)
+        for chunk_part in chunk_parts:
+            for match in re.finditer(PAT, chunk_part):
+                word = match.group()
+                encode_result.append(pre_encode_dict[word.encode("utf-8")])
+
+        return encode_result
+
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterable[str]:
+        for text in iterable:
+            ids = self.encode(text)
+            yield from ids
+
+    def decode(self, ids: list[int]) -> str:
+        result = b""
+        for id in ids:
+            word = self.vocab[id]
+            result += word
+
+        return result.decode("utf-8", errors="replace")
 
 
 if __name__ == "__main__":
