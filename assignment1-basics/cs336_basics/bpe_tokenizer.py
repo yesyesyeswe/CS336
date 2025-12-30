@@ -317,7 +317,7 @@ class BPETokenizer:
         for chunk_part in chunk_parts:
             for match in re.finditer(PAT, chunk_part):
                 word = match.group()
-                encode_result.append(pre_encode_dict[word.encode("utf-8")])
+                encode_result.extend(pre_encode_dict[word.encode("utf-8")])
 
         return encode_result
 
