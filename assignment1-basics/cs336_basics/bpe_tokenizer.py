@@ -61,7 +61,6 @@ class BPETrainer:
     input_path: str | os.PathLike
     vocab_size: int
     special_tokens: list[str]
-    isTrain: bool = True
     pretoken: list[WordState] = field(init=False)
     pair_context_dict: dict[tuple[bytes, bytes], PairContext] = field(
         default_factory=lambda: defaultdict(PairContext), init=False
@@ -259,6 +258,7 @@ class BPETokenizer:
             # preventing shorter tokens from incorrectly matching within longer ones.
             self.special_tokens = sorted(special_tokens, key=len, reverse=True)
             for token in self.special_tokens:
+                token = token.encode("utf-8")
                 if token not in self.encoder:
                     self.encoder[token] = len(self.vocab)
                     self.vocab[len(self.vocab)] = token
@@ -357,13 +357,11 @@ class BPETokenizer:
 
 if __name__ == "__main__":
     current_dir = Path(__file__).parent.parent
-    input_path = current_dir / "tests/fixtures/corpus.en"
+    data_name = "owt_valid"
+    input_path = current_dir / f"data/{data_name}.txt"
     special_tokens = ["<|endoftext|>"]
-    vocab_size = 256 + len(special_tokens) + (500 - 256 - 1)
+    vocab_size = 256 + len(special_tokens) + (32000 - 256 - 1)
 
     bpe_trainer = BPETrainer(input_path, vocab_size, special_tokens)
     vocab, merge_list = bpe_trainer.train()
-    bpe_trainer.save("data/vocab.json", "data/merges.json")
-
-    # for merge_pair in merge_list:
-    #     print(decode_tuple_bytes_to_str(merge_pair))
+    bpe_trainer.save(f"tokenizer/{data_name}_vocab.json", f"tokenizer/{data_name}_merges.json")
