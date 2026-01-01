@@ -66,26 +66,14 @@ def _pre_tokenize_chunk(path: str, start: int, end: int, special_tokens: list[st
         f.seek(start)
         chunk = f.read(end - start).decode("utf-8", errors="ignore")
 
-        chunk_parts = re.split(re.escape("|".join(special_tokens)), chunk)
+        if special_tokens:
+            chunk_parts = re.split("|".join(re.escape(t) for t in special_tokens), chunk)
+        else:
+            chunk_parts = [chunk]
         for chunk_part in chunk_parts:
             for match in re.finditer(PAT, chunk_part):
                 word = match.group()
                 result[word] = result.get(word, 0) + 1
-
-    return result
-
-
-def _pre_tokenize_bytes_chunk(data: bytes, special_tokens: list[str]) -> dict[str, int]:
-    PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-
-    result = {}
-    chunk = data.decode("utf-8", errors="ignore")
-
-    chunk_parts = re.split(re.escape("|".join(special_tokens)), chunk)
-    for chunk_part in chunk_parts:
-        for match in re.finditer(PAT, chunk_part):
-            word = match.group()
-            result[word] = result.get(word, 0) + 1
 
     return result
 
@@ -106,40 +94,6 @@ def pre_tokenize(path: str, num_processes: int, special_tokens: list[str]) -> li
     with multiprocessing.Pool(processes=num_processes) as pool:
         for start, end in zip(boundaries[:-1], boundaries[1:]):
             res = pool.apply_async(_pre_tokenize_chunk, args=(path, start, end, special_tokens))
-            count_results.append(res)
-
-        full_result = {}
-        for res in count_results:
-            full_result = merge_dicts(full_result, res.get())
-
-    word_states = []
-    for key, value in full_result.items():
-        word_states.append(WordState(token=[bytes([b]) for b in key.encode("utf-8")], count=value))
-
-    return word_states
-
-
-def pre_tokenize_from_str(text: str, num_processes: int, special_tokens: list[str]) -> list[WordState]:
-    """
-    Pre-tokenize a string directly in memory using multiple processes.
-    """
-    import io
-
-    # Convert to bytes for consistent boundary handling
-    byte_data = text.encode("utf-8")
-
-    with io.BytesIO(byte_data) as f:
-        boundaries = find_chunk_boundaries(f, num_processes, b"<|endoftext|>")
-
-    count_results = []
-    if not special_tokens:
-        special_tokens = ["<|endoftext|>"]
-
-    # Process chunk using multiprocessing
-    with multiprocessing.Pool(processes=num_processes) as pool:
-        for start, end in zip(boundaries[:-1], boundaries[1:]):
-            chunk_data = byte_data[start:end]
-            res = pool.apply_async(_pre_tokenize_bytes_chunk, args=(chunk_data, special_tokens))
             count_results.append(res)
 
         full_result = {}

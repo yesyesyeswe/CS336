@@ -1,4 +1,4 @@
-from cs336_basics.pre_tokenizer import pre_tokenize, pre_tokenize_from_str, WordState
+from cs336_basics.pre_tokenizer import pre_tokenize, WordState
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -75,9 +75,10 @@ class BPETrainer:
     def initial_vocab(self):
         self.vocab = {i: bytes([i]) for i in range(256)}
         self.vocab_count = 256
-        for token in self.special_tokens:
-            self.vocab[self.vocab_count] = token.encode("utf-8")
-            self.vocab_count += 1
+        if self.special_tokens:
+            for token in self.special_tokens:
+                self.vocab[self.vocab_count] = token.encode("utf-8")
+                self.vocab_count += 1
 
     def initial_pair_context(self):
         for index, wordstate in enumerate(self.pretoken):
@@ -89,9 +90,8 @@ class BPETrainer:
                 self.pair_context_dict[pair].add((index, i))
                 self.pair_context_dict[pair].count += wordstate.count
 
-        if self.isTrain:
-            for pair, pair_ctx in self.pair_context_dict.items():
-                heapq.heappush(self.pair_queue, (-pair_ctx.count, ReverseBytes(pair)))
+        for pair, pair_ctx in self.pair_context_dict.items():
+            heapq.heappush(self.pair_queue, (-pair_ctx.count, ReverseBytes(pair)))
 
     def update_context_dict(self, merged_pair, w_index, c_indexes, isNextNotPrev: bool):
         word = self.pretoken[w_index]
@@ -180,12 +180,11 @@ class BPETrainer:
         return new_tokens
 
     def merge_pair(self, merged_pair: str = ""):
-        if self.isTrain:
-            while True:
-                nge_count, merged_pair = heapq.heappop(self.pair_queue)
-                merged_pair = merged_pair.data
-                if -nge_count == self.pair_context_dict[merged_pair].count:
-                    break
+        while True:
+            nge_count, merged_pair = heapq.heappop(self.pair_queue)
+            merged_pair = merged_pair.data
+            if -nge_count == self.pair_context_dict[merged_pair].count:
+                break
 
         pair_ctx = self.pair_context_dict[merged_pair]
 
@@ -203,15 +202,13 @@ class BPETrainer:
                 token=self.get_token(w_index, sorted_indexes, merged_pair), count=self.pretoken[w_index].count
             )
 
-        if self.isTrain:
-            for pair in self.updated_pairs:
-                if pair not in self.pair_context_dict:
-                    continue
-                count = self.pair_context_dict[pair].count
-                heapq.heappush(self.pair_queue, (-count, ReverseBytes(pair)))
+        for pair in self.updated_pairs:
+            if pair not in self.pair_context_dict:
+                continue
+            count = self.pair_context_dict[pair].count
+            heapq.heappush(self.pair_queue, (-count, ReverseBytes(pair)))
 
-            self.updated_pairs.clear()
-
+        self.updated_pairs.clear()
         self.pair_context_dict.pop(merged_pair, None)
 
         return merged_pair
@@ -238,22 +235,6 @@ class BPETrainer:
 
         return self.vocab, self.merge_list
 
-    def pre_encode(self, pretoken, merges, vocab):
-        # Prepare for encode
-        self.isTrain = False
-        self.merge_list = merges
-        self.vocab = vocab
-        self.pretoken = pretoken
-
-        # Initial the pair context
-        self.initial_pair_context()
-
-        # Merge pair
-        for merged_pair in self.merge_list:
-            self.merge_pair(merged_pair)
-
-        return self.pretoken
-
     def save(self, vocab_path, merges_path):
         readable_vocab = {k: v.hex() for k, v in self.vocab.items()}
         with open(vocab_path, "w") as f:
@@ -269,15 +250,14 @@ class BPETokenizer:
         self, vocab: dict[int, bytes], merges: list[tuple[bytes, bytes]], special_tokens: list[str] | None = None
     ):
         self.vocab = vocab
-        self.merges = merges
-        if not special_tokens:
-            self.special_tokens = ["<|endoftext|>"]
-        else:
-            self.special_tokens = special_tokens
-            self.special_tokens.append("<|endoftext|>")
+        self.merges = {pair: rank for rank, pair in enumerate(merges)}
+        self.special_tokens = special_tokens
 
         self.encoder = {v: k for k, v in self.vocab.items()}
         if self.special_tokens:
+            # Sort special tokens in descending order of length to ensure longer tokens are processed first,
+            # preventing shorter tokens from incorrectly matching within longer ones.
+            self.special_tokens = sorted(special_tokens, key=len, reverse=True)
             for token in self.special_tokens:
                 if token not in self.encoder:
                     self.encoder[token] = len(self.vocab)
@@ -299,29 +279,69 @@ class BPETokenizer:
 
         return bpe_tokenizer
 
+    def encode_word(self, word: bytes):
+        # origin bytes
+        wlist = [bytes([b]) for b in word]
+
+        # merge
+        while len(wlist) > 1:
+            min_idx = -1
+            min_pair = None
+            min_rank = len(self.merges) + 1
+            for i in range(len(wlist) - 1):
+                pair = (wlist[i], wlist[i + 1])
+                if pair not in self.merges:
+                    continue
+                rank = self.merges[pair]
+                if rank >= min_rank:
+                    continue
+                min_rank = rank
+                min_idx = i
+                min_pair = pair
+
+            # Nothing to merge
+            if min_idx == -1:
+                break
+
+            # Merge
+            wlist = wlist[:min_idx] + [b"".join(min_pair)] + wlist[min_idx + 2 :]
+
+        return [self.encoder[b] for b in wlist]
+
     def encode(self, text: str) -> list[int]:
-        self.pretoken = pre_tokenize_from_str(text, 12, self.special_tokens)
-
-        bpe_trainer = BPETrainer("", 0, self.special_tokens)
-        bpe_trainer.pretoken = self.pretoken
-        pre_encode = bpe_trainer.pre_encode(self.pretoken, self.merges, self.vocab)
-
-        pre_encode_dict = {}
-        for wordstate in pre_encode:
-            pre_encode_dict[b"".join(wordstate.token)] = [self.encoder[tk] for tk in wordstate.token]
+        encode_dict = {}
+        if self.special_tokens:
+            for special_token in self.special_tokens:
+                token_bytes = special_token.encode("utf-8")
+                encode_dict[token_bytes] = [self.encoder[token_bytes]]
 
         PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
         encode_result = []
-        chunk_parts = re.split(re.escape("|".join(self.special_tokens)), text)
+
+        if self.special_tokens:
+            chunk_parts = re.split("(" + "|".join(re.escape(t) for t in self.special_tokens) + ")", text)
+        else:
+            chunk_parts = [text]
         for chunk_part in chunk_parts:
+            if not chunk_part:
+                continue
+            # process special token
+            if self.special_tokens and chunk_part in self.special_tokens:
+                encode_result.extend(encode_dict[chunk_part.encode("utf-8")])
+                continue
             for match in re.finditer(PAT, chunk_part):
-                word = match.group()
-                encode_result.extend(pre_encode_dict[word.encode("utf-8")])
+                word = match.group().encode("utf-8")
+                if word in encode_dict:
+                    encode_result.extend(encode_dict[word])
+                else:
+                    word_encode = self.encode_word(word)
+                    encode_dict[word] = word_encode
+                    encode_result.extend(word_encode)
 
         return encode_result
 
-    def encode_iterable(self, iterable: Iterable[str]) -> Iterable[str]:
+    def encode_iterable(self, iterable: Iterable[str]) -> Iterable[int]:
         for text in iterable:
             ids = self.encode(text)
             yield from ids
