@@ -10,7 +10,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from cs336_basics.bpe_tokenizer import BPETrainer, BPETokenizer
-from cs336_basics.utils import Linear, Embedding, RMSNorm, SwiGLU, RotaryPositionalEmbedding, softmax, scaled_dot_product_attention, MHA
+from cs336_basics.utils import Linear, Embedding, RMSNorm, SwiGLU, RotaryPositionalEmbedding, softmax, scaled_dot_product_attention, MHA, TFBlock, TFLM, SiLU
 
 def run_linear(
     d_in: int,
@@ -196,11 +196,11 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    mha = MHA(d_model, num_heads, max_seq_len, theta, token_positions)
+    mha = MHA(d_model, num_heads, max_seq_len, theta)
     W_QKV = torch.cat([q_proj_weight, k_proj_weight, v_proj_weight], dim=0)
     state_dice = {"W_QKV.W": W_QKV, "W_O.W": o_proj_weight}
     mha.load_state_dict(state_dice)
-    return mha(in_features)
+    return mha(in_features, token_positions)
 
 
 def run_rope(
@@ -296,7 +296,19 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    transform_block = TFBlock(d_model, num_heads, d_ff, max_seq_len, theta)
+    W_QKV = torch.cat([weights["attn.q_proj.weight"], weights["attn.k_proj.weight"], weights["attn.v_proj.weight"]], dim=0)
+    state_dict = {
+        "mha.W_QKV.W": W_QKV,
+        "mha.W_O.W": weights["attn.output_proj.weight"],
+        "rmsnorm1.g": weights["ln1.weight"],
+        "ffn.w1.W": weights["ffn.w1.weight"],
+        "ffn.w2.W": weights["ffn.w2.weight"],
+        "ffn.w3.W": weights["ffn.w3.weight"],
+        "rmsnorm2.g": weights["ln2.weight"],
+    }
+    transform_block.load_state_dict(state_dict)
+    return transform_block(in_features)
 
 
 def run_transformer_lm(
@@ -378,7 +390,34 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    transform_lm = TFLM(vocab_size, context_length, d_model, num_layers, num_heads, d_ff, rope_theta)
+
+    lm_state_dict = {
+        "embedding.vocab": weights["token_embeddings.weight"],
+        "rmsnorm.g": weights["ln_final.weight"],
+        "lm_head.W": weights["lm_head.weight"],
+    }
+
+    for i in range(num_layers):
+        W_QKV = torch.cat([
+            weights[f"layers.{i}.attn.q_proj.weight"],
+            weights[f"layers.{i}.attn.k_proj.weight"],
+            weights[f"layers.{i}.attn.v_proj.weight"]
+        ], dim=0)
+
+        # 将每一层 block 的参数映射到 transform_blocks.i 路径下
+        lm_state_dict.update({
+            f"transform_blocks.{i}.mha.W_QKV.W": W_QKV,
+            f"transform_blocks.{i}.mha.W_O.W": weights[f"layers.{i}.attn.output_proj.weight"],
+            f"transform_blocks.{i}.rmsnorm1.g": weights[f"layers.{i}.ln1.weight"],
+            f"transform_blocks.{i}.ffn.w1.W": weights[f"layers.{i}.ffn.w1.weight"],
+            f"transform_blocks.{i}.ffn.w2.W": weights[f"layers.{i}.ffn.w2.weight"],
+            f"transform_blocks.{i}.ffn.w3.W": weights[f"layers.{i}.ffn.w3.weight"],
+            f"transform_blocks.{i}.rmsnorm2.g": weights[f"layers.{i}.ln2.weight"],
+        })
+
+    transform_lm.load_state_dict(lm_state_dict)
+    return transform_lm(in_indices)
 
 
 def run_rmsnorm(
@@ -420,7 +459,7 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    raise NotImplementedError
+    return SiLU(in_features)
 
 
 def run_get_batch(

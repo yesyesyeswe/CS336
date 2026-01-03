@@ -5,22 +5,31 @@ from einops import einsum, rearrange
 
 
 class RotaryPositionalEmbedding(Module):
+    _R_cache: dict[tuple, Tensor] = {}
+
     def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
         super().__init__()
-        # Stable way
-        thetas = einsum(
-            arange(max_seq_len, device=device),
-            exp(-2 * arange(0, d_k // 2, device=device) * log(tensor(theta, device=device)) / d_k),
-            "i, k -> i k",
-        )
-        cos_thetas = cos(thetas)
-        sin_thetas = sin(thetas)
 
-        R = empty(max_seq_len, 2, d_k, device=device)
-        R[:, 0, 0::2] = cos_thetas
-        R[:, 1, 1::2] = cos_thetas
-        R[:, 0, 1::2] = -sin_thetas
-        R[:, 1, 0::2] = sin_thetas
+        cache_key = (theta, d_k, max_seq_len, str(device))
+        if cache_key in RotaryPositionalEmbedding._R_cache:
+            R = RotaryPositionalEmbedding._R_cache[cache_key]
+        else:
+            # Stable way
+            thetas = einsum(
+                arange(max_seq_len, device=device),
+                exp(-2 * arange(0, d_k // 2, device=device) * log(tensor(theta, device=device)) / d_k),
+                "i, k -> i k",
+            )
+            cos_thetas = cos(thetas)
+            sin_thetas = sin(thetas)
+
+            R = empty(max_seq_len, 2, d_k, device=device)
+            R[:, 0, 0::2] = cos_thetas
+            R[:, 1, 1::2] = cos_thetas
+            R[:, 0, 1::2] = -sin_thetas
+            R[:, 1, 0::2] = sin_thetas
+            RotaryPositionalEmbedding._R_cache[cache_key] = R
+
         self.register_buffer("R", R, persistent=False)
 
     def forward(self, x: Tensor, token_positions: Tensor) -> Tensor:

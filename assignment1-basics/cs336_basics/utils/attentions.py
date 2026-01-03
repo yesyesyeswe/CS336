@@ -18,14 +18,7 @@ def scaled_dot_product_attention(
 
 
 class MHA(Module):
-    def __init__(
-        self,
-        d_model: int,
-        num_heads: int,
-        max_seq_len: int = 0,
-        theta: float = 0.0,
-        token_positions: Int[Tensor, " ... sequence_length"] | None = None,
-    ):
+    def __init__(self, d_model: int, num_heads: int, max_seq_len: int = 0, theta: float = 0.0):
         super().__init__()
         self.d_model = d_model
         self.num_heads = num_heads
@@ -34,17 +27,16 @@ class MHA(Module):
         self.W_O = Linear(d_model, d_model)
         self.max_seq_len = max_seq_len
         self.theta = theta
-        self.token_positions = token_positions
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Tensor, token_positions: Int[Tensor, " ... sequence_length"] | None = None):
         Qs, Ks, Vs = rearrange(
             self.W_QKV(x), "... sequence_length (k h d_k) -> k h ... sequence_length d_k", k=3, h=self.num_heads
         )
 
         if self.max_seq_len:
             rope = RotaryPositionalEmbedding(self.theta, self.d_k, self.max_seq_len, x.device)
-            Qs = rope(Qs, self.token_positions)
-            Ks = rope(Ks, self.token_positions)
+            Qs = rope(Qs, token_positions)
+            Ks = rope(Ks, token_positions)
 
         seq_len = x.size(-2)
         mask = ~triu(ones(seq_len, seq_len, device=x.device), diagonal=1).to(bool)
