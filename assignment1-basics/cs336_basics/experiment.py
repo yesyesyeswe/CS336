@@ -3,6 +3,14 @@ from pathlib import Path
 import time
 import numpy as np
 
+import torch
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from cs336_basics.utils import SGD
+import os
+
 # Control variable to select the experiment to run
 # 1: Longest token
 # 2: Vocabulary Overlap
@@ -11,7 +19,8 @@ import numpy as np
 # 6: Dataset Encoding
 # 7: Transformer Memory & FLOPs Calculator
 # 8: GPT-2 XL Context Length Scaling
-EXPERIMENT_TYPE = 8
+# 9: SGD Learning Rate Comparison
+EXPERIMENT_TYPE = 9
 
 current_dir = Path(__file__).parent.parent
 tokenizer_dir = current_dir / "tokenizer"
@@ -402,3 +411,79 @@ elif EXPERIMENT_TYPE == 8:
             )
 
     print(f"\nResults saved to {md_output_path}")
+
+elif EXPERIMENT_TYPE == 9:
+
+    def run_original_experiment():
+        print("\n=== Running Original Experiment (LR=1, 100 iterations) ===")
+        torch.manual_seed(42)
+        weights = torch.nn.Parameter(5 * torch.randn((10, 10)))
+        opt = SGD([weights], lr=1)
+
+        losses = []
+        for t in range(100):
+            opt.zero_grad()  # Reset the gradients for all learnable parameters.
+            loss = (weights**2).mean()  # Compute a scalar loss value.
+            loss_val = loss.cpu().item()
+            losses.append(loss_val)
+            # print(loss_val) # Reduced verbosity for bulk run, but keeping logic
+            loss.backward()  # Run backward pass, which computes gradients.
+            opt.step()  # Run optimizer step.
+
+        print(f"Final Loss (Iter 100): {losses[-1]:.4f}")
+        return losses
+
+    def run_lr_comparison():
+        print("\n=== Running LR Comparison Experiment (LR=[1, 10, 100, 1000], 10 iterations) ===")
+        lrs = [1.0, 10.0, 100.0, 1000.0]
+        results = {}
+
+        # Set seed for reproducibility to compare across LRs fairly
+        # Using a fixed initial tensor for all runs in this comparison
+        torch.manual_seed(42)
+        initial_data = 5 * torch.randn((10, 10))
+
+        print(f"{'LR':<10} | {'Iter 0':<12} | {'Iter 9':<12} | {'Trend'}")
+        print("-" * 60)
+
+        for lr in lrs:
+            weights = torch.nn.Parameter(initial_data.clone())
+            opt = SGD([weights], lr=lr)
+
+            losses = []
+            for t in range(10):
+                opt.zero_grad()
+                loss = (weights**2).mean()
+                loss_val = loss.item()
+                losses.append(loss_val)
+
+                loss.backward()
+                opt.step()
+
+            results[lr] = losses
+
+            # Determine trend
+            trend = "Decreasing" if losses[-1] < losses[0] else "Increasing/Diverging"
+            print(f"{lr:<10} | {losses[0]:<12.4f} | {losses[-1]:<12.4f} | {trend}")
+
+        # Plotting
+        plt.figure(figsize=(10, 6))
+        for lr, losses in results.items():
+            plt.plot(range(len(losses)), losses, marker="o", label=f"LR={lr}")
+
+        plt.xlabel("Iteration")
+        plt.ylabel("Loss")
+        plt.yscale("log")
+        plt.title("SGD Training Loss with Different Learning Rates (10 Iterations)")
+        plt.legend()
+        plt.grid(True)
+
+        output_path = "loss_comparison.png"
+        plt.savefig(output_path)
+        print(f"\nPlot saved to {os.path.abspath(output_path)}")
+
+    # Original experiment requested by user prompt
+    run_original_experiment()
+
+    # New experiment requested (comparison)
+    run_lr_comparison()
