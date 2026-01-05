@@ -1,10 +1,17 @@
-from torch import Tensor, max, sum, exp, log, arange, zeros_like, sqrt, norm
+from torch import Tensor, max, sum, exp, log, arange, zeros_like, sqrt, norm, from_numpy, save, load
+from torch.nn import Module
 
 from einops import reduce
 
 from collections.abc import Callable
 from torch.optim import Optimizer
 import math
+
+import numpy.typing as npt
+from numpy import random, stack
+
+import os
+import typing
 
 
 def cross_entropy(inputs: Tensor, targets: Tensor):
@@ -112,3 +119,29 @@ def gradient_clipping(parameters, max_l2_norm: float) -> None:
         if norm(p.grad) < max_l2_norm:
             continue
         p.grad *= max_l2_norm / (total_norm + 1e-6)
+
+
+def get_batch(dataset: npt.NDArray, batch_size: int, context_length: int, device: str) -> tuple[Tensor, Tensor]:
+    idx = random.randint(0, len(dataset) - context_length, size=(batch_size,))
+    x_batch = stack([dataset[i : i + context_length] for i in idx])
+    y_batch = stack([dataset[i + 1 : i + 1 + context_length] for i in idx])
+
+    return from_numpy(x_batch).to(device), from_numpy(y_batch).to(device)
+
+
+def save_checkpoint(
+    model: Module, optimizer: Optimizer, iteration: int, out: str | os.PathLike | typing.BinaryIO | typing.IO[bytes]
+):
+    dict_save = {}
+    dict_save["model"] = model.state_dict()
+    dict_save["optimizer"] = optimizer.state_dict()
+    dict_save["iteration"] = iteration
+
+    save(dict_save, out)
+
+
+def load_checkpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes], model: Module, optimizer: Optimizer):
+    dict_save = load(src, weights_only=False)
+    model.load_state_dict(dict_save["model"])
+    optimizer.load_state_dict(dict_save["optimizer"])
+    return dict_save["iteration"]
