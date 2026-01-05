@@ -1,4 +1,4 @@
-from torch import Tensor, max, sum, exp, log, arange, zeros_like, sqrt
+from torch import Tensor, max, sum, exp, log, arange, zeros_like, sqrt, norm
 
 from einops import reduce
 
@@ -80,3 +80,35 @@ class AdamW(Optimizer):
                 state["t"] = t + 1
 
         return loss
+
+
+def lr_cosine_schedule(
+    it: int, max_learning_rate: float, min_learning_rate: float, warmup_iters: int, cosine_cycle_iters: int
+):
+    if it < warmup_iters:
+        return it / warmup_iters * max_learning_rate
+    elif it > cosine_cycle_iters:
+        return min_learning_rate
+
+    return (
+        min_learning_rate
+        + (1 + math.cos((it - warmup_iters) / (cosine_cycle_iters - warmup_iters) * math.pi))
+        * (max_learning_rate - min_learning_rate)
+        / 2
+    )
+
+
+def gradient_clipping(parameters, max_l2_norm: float) -> None:
+    total_norm = 0.0
+    for p in parameters:
+        if p is None or p.grad is None:
+            continue
+        total_norm += norm(p.grad) ** 2
+
+    total_norm = total_norm**0.5
+    for p in parameters:
+        if p is None or p.grad is None:
+            continue
+        if norm(p.grad) < max_l2_norm:
+            continue
+        p.grad *= max_l2_norm / (total_norm + 1e-6)
