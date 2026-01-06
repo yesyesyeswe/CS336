@@ -1,7 +1,7 @@
-from torch import Tensor, max, sum, exp, log, arange, zeros_like, sqrt, norm, from_numpy, save, load
+from torch import Tensor, exp, log, arange, zeros_like, sqrt, norm, from_numpy, save, load
 from torch.nn import Module
 
-from einops import reduce
+from einops import reduce, rearrange
 
 from collections.abc import Callable
 from torch.optim import Optimizer
@@ -15,9 +15,30 @@ import typing
 
 
 def cross_entropy(inputs: Tensor, targets: Tensor):
-    max_val, _ = max(inputs, -1, keepdim=True)
-    exp_sum = sum(exp(inputs - max_val), -1)
-    return reduce(-inputs[arange(inputs.size(0)), targets] + max_val + log(exp_sum), "... batch_size -> ", "mean")
+    # Numerical stability: subtract max before exp
+    max_val = reduce(inputs, "... vocab -> ... 1", "max")
+    # Calculate log(sum(exp(x - max)))
+    exp_sum = reduce(exp(inputs - max_val), "... vocab -> ... 1", "sum")
+    # log_sum_exp: shape (..., 1)
+    log_sum_exp = max_val + log(exp_sum)
+
+    # Flatten inputs and targets to handle arbitrary dimensions (e.g., batch, seq)
+    # inputs: (..., vocab) -> (N, vocab)
+    # targets: (...) -> (N,)
+    inputs_flat = rearrange(inputs, "... vocab -> (...) vocab")
+    targets_flat = rearrange(targets, "... -> (...)")
+
+    # Select the logits corresponding to the target classes
+    target_logits = inputs_flat[arange(inputs_flat.shape[0]), targets_flat]
+
+    # Reshape target_logits back to (...) or just align with log_sum_exp for subtraction
+    # log_sum_exp is (..., 1), we can flatten it to (N,) to match target_logits
+    log_sum_exp_flat = rearrange(log_sum_exp, "... 1 -> (...)")
+
+    # Loss = -x[class] + log(sum(exp(x)))
+    loss = -target_logits + log_sum_exp_flat
+
+    return reduce(loss, "batch -> ", "mean")
 
 
 class SGD(Optimizer):
@@ -126,7 +147,7 @@ def get_batch(dataset: npt.NDArray, batch_size: int, context_length: int, device
     x_batch = stack([dataset[i : i + context_length] for i in idx])
     y_batch = stack([dataset[i + 1 : i + 1 + context_length] for i in idx])
 
-    return from_numpy(x_batch).to(device), from_numpy(y_batch).to(device)
+    return from_numpy(x_batch).to(device).long(), from_numpy(y_batch).to(device).long()
 
 
 def save_checkpoint(

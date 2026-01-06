@@ -1,4 +1,8 @@
-# Byte-compiled / optimized / DLL files
+# Custom ignores
+*.txt
+checkpoints/
+*.png
+wandb/
 __pycache__/
 *.py[cod]
 *$py.class
