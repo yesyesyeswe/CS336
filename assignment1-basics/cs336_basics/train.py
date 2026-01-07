@@ -31,9 +31,9 @@ def run_train(
     eps: float = 1e-8,
 ):
     batch_size = 10
-    num_iterations = 25
+    num_iterations = 1000
     sequence_length = context_length
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu" if torch.cuda.is_available() else "cpu"
 
     # Initialize wandb
     entity = None
@@ -102,6 +102,9 @@ def run_train(
             save_checkpoint(transform_lm, opt, t + 1, checkpoint_path)
             print(f"Checkpoint saved to {checkpoint_path}")
 
+        if (t + 1) == num_iterations:
+            print(f"Final Validation Perplexity: {torch.exp(val_loss).item():.4f}")
+
     print(f"Final Train Loss: {train_losses[-1]:.4f}, Final Val Loss: {val_losses[-1]:.4f}")
 
     # Finish wandb run
@@ -111,14 +114,14 @@ def run_train(
 
 
 def train():
-    data_path = Path(__file__).parent.parent / "data" / "owt_small_train.npy"
+    data_path = Path(__file__).parent.parent / "data" / "ts_small_train.npy"
 
-    vocab_size = 32000
-    context_length = 100
-    d_model = 768
-    num_layers = 12
-    num_heads = 12
-    d_ff = 4 * d_model
+    vocab_size = 10000
+    context_length = 256
+    d_model = 512
+    num_layers = 4
+    num_heads = 16
+    d_ff = 1344
     rope_theta = 10000.0
 
     train_losses, val_losses = run_train(

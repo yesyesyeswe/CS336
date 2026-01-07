@@ -357,10 +357,10 @@ class BPETokenizer:
 
 if __name__ == "__main__":
     current_dir = Path(__file__).parent.parent
-    data_name = "owt_valid"
+    data_name = "TinyStoriesV2-GPT4-train"
     input_path = current_dir / f"data/{data_name}.txt"
     special_tokens = ["<|endoftext|>"]
-    vocab_size = 256 + len(special_tokens) + (32000 - 256 - 1)
+    vocab_size = 10000
 
     bpe_trainer = BPETrainer(input_path, vocab_size, special_tokens)
     vocab, merge_list = bpe_trainer.train()

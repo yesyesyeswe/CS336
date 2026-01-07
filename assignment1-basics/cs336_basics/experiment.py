@@ -20,7 +20,7 @@ import os
 # 7: Transformer Memory & FLOPs Calculator
 # 8: GPT-2 XL Context Length Scaling
 # 9: SGD Learning Rate Comparison
-EXPERIMENT_TYPE = 9
+EXPERIMENT_TYPE = 6
 
 current_dir = Path(__file__).parent.parent
 tokenizer_dir = current_dir / "tokenizer"
@@ -29,9 +29,10 @@ data_dir = current_dir / "data"
 owt_vocab_path = tokenizer_dir / "owt_valid_vocab.json"
 owt_merges_path = tokenizer_dir / "owt_valid_merges.json"
 owt_data_path = data_dir / "owt_small.txt"
-TinyStories_vocab_path = tokenizer_dir / "TinyStoriesV2-GPT4-valid_vocab.json"
-TinyStories_merges_path = tokenizer_dir / "TinyStoriesV2-GPT4-valid_merges.json"
-TinyStories_data_path = data_dir / "TinyStories_small.txt"
+TinyStories_vocab_path = tokenizer_dir / "TinyStoriesV2-GPT4-train_vocab.json"
+TinyStories_merges_path = tokenizer_dir / "TinyStoriesV2-GPT4-train_merges.json"
+TinyStories_train_data_path = data_dir / "TinyStoriesV2-GPT4-train.txt"
+TinyStories_valid_data_path = data_dir / "TinyStoriesV2-GPT4-valid.txt"
 special_tokens = ["<|endoftext|>"]
 
 # Initialize tokenizers only if needed for tokenizer-related experiments
@@ -184,8 +185,8 @@ elif EXPERIMENT_TYPE == 3 or EXPERIMENT_TYPE == 4:
         print(f"[{tokenizer_name} on {data_name}] Compression Ratio: {compression_ratio:.3f} bytes/token")
 
     run_compression_test(owt_tokenizer, owt_data_path, "OWT_Tokenizer", "OWT_Data")
-    run_compression_test(owt_tokenizer, TinyStories_data_path, "OWT_Tokenizer", "TinyStories_Data")
-    run_compression_test(TinyStories_tokenizer, TinyStories_data_path, "TS_Tokenizer", "TinyStories_Data")
+    run_compression_test(owt_tokenizer, TinyStories_train_data_path, "OWT_Tokenizer", "TinyStories_Data")
+    run_compression_test(TinyStories_tokenizer, TinyStories_train_data_path, "TS_Tokenizer", "TinyStories_Data")
     run_compression_test(TinyStories_tokenizer, owt_data_path, "TS_Tokenizer", "OWT_Data")
     """
     [OWT_Tokenizer on OWT_Data] Tokens: 11203
@@ -228,7 +229,7 @@ elif EXPERIMENT_TYPE == 5:
         print(f"[{tokenizer_name}] Estimated time for Pile (825GB): {estimated_hours:.2f} hours")
 
     run_throughput_test(owt_tokenizer, owt_data_path, "OWT_Tokenizer")
-    run_throughput_test(TinyStories_tokenizer, TinyStories_data_path, "TS_Tokenizer")
+    run_throughput_test(TinyStories_tokenizer, TinyStories_train_data_path, "TS_Tokenizer")
     """
     [OWT_Tokenizer] Throughput: 0.39 MB/s
     [OWT_Tokenizer] Estimated time for Pile (825GB): 600.14 hours
@@ -239,7 +240,6 @@ elif EXPERIMENT_TYPE == 5:
 elif EXPERIMENT_TYPE == 6:
     print("\n================ Experiment 6: Dataset Encoding ================")
     owt_path = data_dir / "owt_small.txt"
-    ts_path = data_dir / "TinyStories_small.txt"
 
     def encode_and_save(tokenizer, input_path, output_path):
         print(f"Encoding {input_path.name}...")
@@ -251,8 +251,23 @@ elif EXPERIMENT_TYPE == 6:
         np.save(output_path, ids_array)
         print(f"Saved to {output_path} (Shape: {ids_array.shape}, Dtype: {ids_array.dtype})")
 
-    encode_and_save(owt_tokenizer, owt_path, data_dir / "owt_small_train.npy")
-    encode_and_save(TinyStories_tokenizer, ts_path, data_dir / "ts_small_train.npy")
+    def encode_and_save_efficiently(tokenizer, input_path, output_path):
+        print(f"Encoding {input_path.name} iteratively...")
+
+        with open(input_path, encoding="utf-8") as f:
+            token_id_generator = tokenizer.encode_iterable(f)
+            ids_array = np.fromiter(token_id_generator, dtype=np.uint16)
+
+        np.save(output_path, ids_array)
+        print(f"Saved to {output_path} (Shape: {ids_array.shape})")
+
+    # encode_and_save(owt_tokenizer, owt_path, data_dir / "owt_small_train.npy")
+    encode_and_save_efficiently(
+        TinyStories_tokenizer, TinyStories_train_data_path, data_dir / "TinyStoriesV2-GPT4-train.npy"
+    )
+    encode_and_save_efficiently(
+        TinyStories_tokenizer, TinyStories_valid_data_path, data_dir / "TinyStoriesV2-GPT4-valid.npy"
+    )
 
 elif EXPERIMENT_TYPE == 7:
     print("\n============ Experiment 7: Model Memory & FLOPs ============")
