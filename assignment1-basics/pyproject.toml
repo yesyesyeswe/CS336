@@ -20,6 +20,9 @@ dependencies = [
     "wandb>=0.19.7",
     "ty>=0.0.1a16",
     "matplotlib>=3.10.8",
+    "kaleido>=1.2.0",
+    "plotly>=6.5.1",
+    "optuna>=4.6.0",
 ]
 
 [build-system]

@@ -1,4 +1,6 @@
 from cs336_basics.bpe_tokenizer import BPETokenizer
+from cs336_basics.train import run_train
+import optuna
 from pathlib import Path
 import time
 import numpy as np
@@ -20,7 +22,8 @@ import os
 # 7: Transformer Memory & FLOPs Calculator
 # 8: GPT-2 XL Context Length Scaling
 # 9: SGD Learning Rate Comparison
-EXPERIMENT_TYPE = 6
+# 10: Hyperparameter Optimization
+EXPERIMENT_TYPE = 10
 
 current_dir = Path(__file__).parent.parent
 tokenizer_dir = current_dir / "tokenizer"
@@ -502,3 +505,135 @@ elif EXPERIMENT_TYPE == 9:
 
     # New experiment requested (comparison)
     run_lr_comparison()
+
+elif EXPERIMENT_TYPE == 10:
+    print("\n================ Experiment 10: Hyperparameter Optimization ================")
+
+    def objective(trial):
+        # Define search space around the default values provided
+        # Defaults: lr=1e-3, weight_decay=0.1, beta1=0.9, beta2=0.95, eps=1e-8
+
+        # Log-uniform search for Learning Rate (centered around 1e-3)
+        lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
+
+        # Log-uniform search for Weight Decay (centered around 0.1)
+        weight_decay = trial.suggest_float("weight_decay", 1e-3, 1.0, log=True)
+
+        # Uniform search for Beta1 (around 0.9)
+        beta1 = trial.suggest_float("beta1", 0.85, 0.95)
+
+        # Uniform search for Beta2 (around 0.95)
+        beta2 = trial.suggest_float("beta2", 0.90, 0.99)
+
+        # Log-uniform search for Epsilon (around 1e-8)
+        eps = trial.suggest_float("eps", 1e-9, 1e-7, log=True)
+
+        # Integer search for Warmup Iterations (around 100)
+        warmup_iters = trial.suggest_int("warmup_iters", 30, 70)
+
+        # Integer search for Cosine Cycle Iterations
+        # We search around the total number of iterations (200), allowing it to be shorter or longer
+        cosine_cycle_iters = trial.suggest_int("cosine_cycle_iters", 120, 150)
+
+        print(f"\n--- Trial {trial.number} ---")
+        print(
+            f"Params: lr={lr:.2e}, wd={weight_decay:.2e}, b1={beta1:.4f}, b2={beta2:.4f}, eps={eps:.2e}, warmup={warmup_iters}, cycle={cosine_cycle_iters}"
+        )
+
+        # Run training
+        train_path = data_dir / "TinyStoriesV2-GPT4-train.npy"
+        valid_path = data_dir / "TinyStoriesV2-GPT4-valid.npy"
+
+        if not train_path.exists():
+            print(f"Warning: {train_path} does not exist. Please run Experiment 6 first to generate .npy files.")
+            pass
+
+        try:
+            _, val_losses = run_train(
+                vocab_size=10000,
+                context_length=256,
+                d_model=512,
+                num_layers=4,
+                num_heads=16,
+                d_ff=1344,
+                rope_theta=10000.0,
+                train_path=train_path,
+                valid_path=valid_path,
+                lr=lr,
+                weight_decay=weight_decay,
+                betas=(beta1, beta2),
+                eps=eps,
+                warmup_iters=warmup_iters,
+                cosine_cycle_iters=cosine_cycle_iters,
+                num_iterations=150,
+            )
+            final_val_loss = val_losses[-1]
+            return final_val_loss
+        except Exception as e:
+            print(f"Trial failed: {e}")
+            return float("inf")
+
+    # Create a study and optimize
+    study = optuna.create_study(direction="minimize")
+
+    # We limit the number of trials to 8 to demonstrate "searching" without "traversing" the full grid.
+    study.optimize(objective, n_trials=8)
+
+    print("\n================ Optimization Results ================")
+    print("Best trial:")
+    trial = study.best_trial
+
+    print(f"  Value (Val Loss): {trial.value}")
+    print("  Params: ")
+    for key, value in trial.params.items():
+        print(f"    {key}: {value}")
+
+    # Visualization
+    print("\nSaving optimization visualizations...")
+    try:
+        # Use matplotlib backend instead of plotly to avoid browser requirements
+        from optuna.visualization import matplotlib as optuna_plt
+
+        # 1. Optimization History
+        plt.figure()
+        optuna_plt.plot_optimization_history(study)
+        plt.tight_layout()
+        plt.savefig("opt_history.png")
+        print("Saved opt_history.png")
+
+        # 2. Parallel Coordinate Plot
+        # Create a wide figure
+        plt.figure(figsize=(20, 10))
+        optuna_plt.plot_parallel_coordinate(study)
+        # Adjust layout
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.9, bottom=0.1, right=0.9)  # Leave space for labels
+        plt.savefig("opt_parallel.png", bbox_inches="tight")
+        print("Saved opt_parallel.png")
+
+        # 3. Parameter Importances
+        # Requires scikit-learn
+        # try:
+        #     plt.figure()
+        #     optuna_plt.plot_param_importances(study)
+        #     plt.tight_layout()
+        #     plt.savefig("opt_importance.png")
+        #     print("Saved opt_importance.png")
+        # except Exception as e:
+        #     print(f"Could not plot parameter importance (might need more than 1 completed trial): {e}")
+
+    except Exception as e:
+        print(f"Error saving visualizations: {e}")
+"""
+================ Optimization Results ================
+Best trial:
+  Value (Val Loss): 3.4611518383026123
+  Params:
+    lr: 0.0011729107375170252
+    weight_decay: 0.10978009021658337
+    beta1: 0.8985580334915605
+    beta2: 0.9811726002887176
+    eps: 1.4622374563481237e-08
+    warmup_iters: 38
+    cosine_cycle_iters: 149
+"""
