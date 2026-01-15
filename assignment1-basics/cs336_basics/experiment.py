@@ -10,7 +10,8 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from cs336_basics.utils import SGD
+from cs336_basics.utils import SGD, AdamW, TFLM, load_checkpoint
+from cs336_basics.decodeLM import generate
 import os
 
 # Control variable to select the experiment to run
@@ -23,7 +24,8 @@ import os
 # 8: GPT-2 XL Context Length Scaling
 # 9: SGD Learning Rate Comparison
 # 10: Hyperparameter Optimization
-EXPERIMENT_TYPE = 10
+# 11: LLM Decoding
+EXPERIMENT_TYPE = 11
 
 current_dir = Path(__file__).parent.parent
 tokenizer_dir = current_dir / "tokenizer"
@@ -624,16 +626,60 @@ elif EXPERIMENT_TYPE == 10:
 
     except Exception as e:
         print(f"Error saving visualizations: {e}")
-"""
-================ Optimization Results ================
-Best trial:
-  Value (Val Loss): 3.4611518383026123
-  Params:
-    lr: 0.0011729107375170252
-    weight_decay: 0.10978009021658337
-    beta1: 0.8985580334915605
-    beta2: 0.9811726002887176
-    eps: 1.4622374563481237e-08
-    warmup_iters: 38
-    cosine_cycle_iters: 149
-"""
+    """
+    ================ Optimization Results ================
+    Best trial:
+    Value (Val Loss): 3.4611518383026123
+    Params:
+        lr: 0.0011729107375170252
+        weight_decay: 0.10978009021658337
+        beta1: 0.8985580334915605
+        beta2: 0.9811726002887176
+        eps: 1.4622374563481237e-08
+        warmup_iters: 38
+        cosine_cycle_iters: 149
+    """
+elif EXPERIMENT_TYPE == 11:
+    print("\n================ Experiment 11: Decode LM Checkpoint ================")
+
+    device = "cpu" if torch.cuda.is_available() else "cpu"
+
+    vocab_size = 10000
+    context_length = 256
+    d_model = 512
+    num_layers = 4
+    num_heads = 16
+    d_ff = 1344
+    rope_theta = 10000.0
+
+    transform_lm = TFLM(vocab_size, context_length, d_model, num_layers, num_heads, d_ff, rope_theta).to(device)
+    optimizer = AdamW(transform_lm.parameters(), lr=1e-3, weight_decay=0.1, betas=(0.9, 0.98), eps=1e-8)
+
+    checkpoint_path = current_dir / "checkpoints" / "checkpoint_1000.pt"
+
+    if not checkpoint_path.exists():
+        print(f"Checkpoint not found at {checkpoint_path}")
+    else:
+        iteration = load_checkpoint(str(checkpoint_path), transform_lm, optimizer)
+        print(f"Loaded checkpoint from iteration {iteration} at {checkpoint_path}")
+
+        tokenizer = BPETokenizer.from_files(TinyStories_vocab_path, TinyStories_merges_path, special_tokens)
+
+        max_len = 128
+        temperature = 0.8
+        top_p = 0.9
+
+        print("Type 'exit' or 'quit' to stop.")
+
+        while True:
+            prompt = input("You: ").strip()
+            if prompt.lower() in {"exit", "quit"}:
+                break
+            if not prompt:
+                continue
+
+            ids = tokenizer.encode(prompt)
+            x = torch.tensor([ids], dtype=torch.long, device=device)
+
+            response = generate(x, max_len, temperature, top_p, transform_lm, tokenizer)
+            print(f"Model: {response}")

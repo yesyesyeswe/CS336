@@ -2,7 +2,7 @@ import torch
 from cs336_basics.utils import softmax
 
 
-def decodelm(x, max_len: int, t: float, p: float, transform_lm, bpe_tokenizer):
+def generate(x, max_len: int, t: float, p: float, transform_lm, bpe_tokenizer):
     transform_lm.eval()
     response_id = []
     while len(response_id) < max_len:

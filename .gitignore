@@ -170,3 +170,4 @@ cython_debug/
 commit_messages.txt
 */.git.bak
 */tokenizer/*
+*.md
