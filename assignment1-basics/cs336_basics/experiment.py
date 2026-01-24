@@ -11,7 +11,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from cs336_basics.utils import SGD, AdamW, TFLM, load_checkpoint
-from cs336_basics.decodeLM import generate
 import os
 
 # Control variable to select the experiment to run
@@ -681,5 +680,5 @@ elif EXPERIMENT_TYPE == 11:
             ids = tokenizer.encode(prompt)
             x = torch.tensor([ids], dtype=torch.long, device=device)
 
-            response = generate(x, max_len, temperature, top_p, transform_lm, tokenizer)
+            response = transform_lm.generate(x, max_len, temperature, top_p, tokenizer)
             print(f"Model: {response}")

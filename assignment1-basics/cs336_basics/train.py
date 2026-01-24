@@ -1,6 +1,5 @@
 import torch
-from cs336_basics.utils import AdamW, TFLM, get_batch, cross_entropy, save_checkpoint, lr_cosine_schedule
-from numpy import load
+from cs336_basics.utils import AdamW, TFLM, get_batch, cross_entropy, save_checkpoint, lr_cosine_schedule, load_data
 import matplotlib
 import argparse
 
@@ -9,17 +8,6 @@ import matplotlib.pyplot as plt
 import os
 import wandb
 from pathlib import Path
-
-
-def load_data(train_path: str | Path, valid_path: str | Path, ratio: float = 0.1):
-    if valid_path is None:
-        train_dataset = load(train_path, mmap_mode="r")
-        train_num = int(len(train_dataset) * (1 - ratio))
-        return train_dataset[:train_num], train_dataset[train_num:]
-
-    train_dataset = load(train_path, mmap_mode="r")
-    valid_dataset = load(valid_path, mmap_mode="r")
-    return train_dataset, valid_dataset
 
 
 def run_train(

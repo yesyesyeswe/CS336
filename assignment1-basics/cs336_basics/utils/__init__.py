@@ -13,7 +13,7 @@ from .train_utils import (
     AdamW,
     lr_cosine_schedule,
     gradient_clipping,
-    get_batch,
     save_checkpoint,
     load_checkpoint,
 )
+from .data import get_batch, load_data

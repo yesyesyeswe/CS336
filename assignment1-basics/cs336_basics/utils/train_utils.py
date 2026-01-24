@@ -1,4 +1,4 @@
-from torch import Tensor, exp, log, arange, zeros_like, sqrt, norm, from_numpy, save, load
+from torch import Tensor, exp, log, arange, zeros_like, sqrt, norm, save, load
 from torch.nn import Module
 
 from einops import reduce, rearrange
@@ -7,8 +7,6 @@ from collections.abc import Callable
 from torch.optim import Optimizer
 import math
 
-import numpy.typing as npt
-from numpy import random, stack
 
 import os
 import typing
@@ -140,14 +138,6 @@ def gradient_clipping(parameters, max_l2_norm: float) -> None:
         if norm(p.grad) < max_l2_norm:
             continue
         p.grad *= max_l2_norm / (total_norm + 1e-6)
-
-
-def get_batch(dataset: npt.NDArray, batch_size: int, context_length: int, device: str) -> tuple[Tensor, Tensor]:
-    idx = random.randint(0, len(dataset) - context_length, size=(batch_size,))
-    x_batch = stack([dataset[i : i + context_length] for i in idx])
-    y_batch = stack([dataset[i + 1 : i + 1 + context_length] for i in idx])
-
-    return from_numpy(x_batch).to(device).long(), from_numpy(y_batch).to(device).long()
 
 
 def save_checkpoint(
