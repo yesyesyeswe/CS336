@@ -25,7 +25,7 @@ repos:
 
   # Ruff for Python format checking
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.4.8
+    rev: v0.14.10
     hooks:
       - id: ruff
         name: ruff check
